@@ -186,6 +186,19 @@
       background: rgba(255,255,255,0.85);
     }
 
+    /* ปุ่มสำรอง "แตะเพื่อเปิดเพลง" (โผล่เฉพาะตอนที่มือถือบล็อกเสียง) */
+    #music-btn {
+      top: calc(72px + env(safe-area-inset-top));
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 10px 22px;
+      border-radius: 999px;
+      font-size: 16px;
+      color: #fff;
+      background: #ff6fa8;
+      animation: pulse 1.4s ease-in-out infinite;
+    }
+
     #photo-btn {
       left: 50%;
       bottom: calc(24px + env(safe-area-inset-bottom));
@@ -281,6 +294,7 @@
   <div id="hint">กำลังเปิดกล้อง... 📷</div>
   <div id="thai-card"></div>
   <button id="mute-btn" class="fab" aria-label="ปิดหรือเปิดเสียง">🔊</button>
+  <button id="music-btn" class="fab">🎵 แตะเพื่อเปิดเพลง</button>
   <button id="photo-btn" class="fab">📸 ถ่ายรูป</button>
   <div id="flash"></div>
 
@@ -436,6 +450,7 @@
     const hint        = document.getElementById('hint');
     const thaiCard    = document.getElementById('thai-card');
     const muteBtn     = document.getElementById('mute-btn');
+    const musicBtn    = document.getElementById('music-btn');
     const photoBtn    = document.getElementById('photo-btn');
     const flash       = document.getElementById('flash');
     const preview     = document.getElementById('preview');
@@ -467,6 +482,59 @@
     }, { passive: false });
 
     /* ============================================================
+       7.5) ระบบเพลง (กันเพลงไม่ดัง)
+       ปัญหาที่พบบ่อย:
+         - iPhone: พอเปิดกล้อง ระบบจะ "หยุดเพลง" ให้เอง → ต้องสั่งเล่นใหม่
+         - ไฟล์เพลงชื่อไม่ตรง (GitHub Pages แยกตัวพิมพ์เล็ก/ใหญ่ เช่น Song.mp3 ≠ song.mp3)
+         - มือถือบล็อกเสียง → แสดงปุ่ม "แตะเพื่อเปิดเพลง" ให้กดอีกครั้ง
+       ============================================================ */
+    let musicWanted = false;   // ผู้ใช้อยากฟังเพลง (กดเริ่มแล้ว และไม่ได้กดปิดเสียง)
+
+    // บอก iPhone (iOS 16.4+) ว่านี่คือ "การเล่นเพลง" เพื่อให้เสียงออกลำโพงเต็มที่
+    function setPlaybackAudioSession() {
+      try {
+        if (navigator.audioSession) navigator.audioSession.type = 'playback';
+      } catch (e) {}
+    }
+
+    // พยายามเล่นเพลง ถ้าไม่สำเร็จจะโชว์ปุ่มสำรองให้แตะ
+    function tryPlayMusic() {
+      if (!musicWanted || bgm.muted) return;
+      setPlaybackAudioSession();
+      bgm.volume = CONFIG.volume;
+      const p = bgm.play();
+      if (p && p.catch) {
+        p.then(() => musicBtn.classList.remove('visible'))
+         .catch(err => {
+           console.warn('เล่นเพลงไม่ได้:', err);
+           if (err.name === 'NotAllowedError') musicBtn.classList.add('visible');
+         });
+      }
+    }
+
+    // ปุ่มสำรอง: แตะแล้วเล่นเพลง (เป็นการแตะของผู้ใช้ มือถือจึงยอมให้เล่น)
+    musicBtn.addEventListener('click', () => {
+      bgm.muted = false;
+      muteBtn.textContent = '🔊';
+      tryPlayMusic();
+    });
+
+    // ถ้าเพลงถูกหยุดเอง (ไม่ใช่เพราะผู้ใช้กดปิด) → ลองเล่นต่อ
+    bgm.addEventListener('pause', () => {
+      if (musicWanted && !bgm.muted && !document.hidden) {
+        setTimeout(tryPlayMusic, 300);
+      }
+    });
+    bgm.addEventListener('playing', () => musicBtn.classList.remove('visible'));
+
+    // หาไฟล์เพลงไม่เจอ → แจ้งเตือนบนจอ
+    bgm.addEventListener('error', () => {
+      hint.textContent = `⚠️ หาไฟล์เพลง "${CONFIG.musicFile}" ไม่เจอ`;
+      hint.classList.add('show');
+      console.error('โหลดไฟล์เพลงไม่ได้ ตรวจชื่อไฟล์และตำแหน่งไฟล์:', CONFIG.musicFile);
+    });
+
+    /* ============================================================
        8) เมื่อแตะปุ่มเริ่ม → เล่นเพลง + เปิดกล้อง + เริ่ม AR
        สำคัญ: ต้องสั่งเล่นเพลง "ทันที" ในเหตุการณ์แตะ
        ไม่อย่างนั้นมือถือจะบล็อกเสียง
@@ -478,9 +546,10 @@
       started = true;
 
       // 8.1 เล่นเพลงทันที (ในจังหวะเดียวกับการแตะ)
-      bgm.volume = CONFIG.volume;
+      musicWanted = true;
       bgm.loop = true;
-      bgm.play().catch(err => console.warn('เล่นเพลงไม่ได้:', err));
+      bgm.muted = false;
+      tryPlayMusic();
 
       // 8.2 ซ่อนหน้าเริ่ม แสดงปุ่มลอยและข้อความแนะนำ
       startScreen.classList.add('hide');
@@ -508,10 +577,10 @@
       hint.textContent = 'หันหน้าเข้ากล้องได้เลย 😊';
       hint.classList.add('show');
 
-      // บน iPhone บางรุ่น การเปิดกล้องจะทำให้เพลงหยุด → สั่งเล่นอีกครั้ง
-      if (bgm.paused && !bgm.muted) {
-        bgm.play().catch(() => {});
-      }
+      // บน iPhone การเปิดกล้องมักทำให้เพลงหยุด → สั่งเล่นอีกครั้ง (ลองซ้ำ 2 ครั้ง)
+      tryPlayMusic();
+      setTimeout(() => { if (bgm.paused) tryPlayMusic(); }, 800);
+      setTimeout(() => { if (bgm.paused) musicBtn.classList.add('visible'); }, 1600);
     });
 
     // 9.2 เปิดกล้องไม่ได้ (ไม่อนุญาต / ไม่ใช่ HTTPS)
@@ -543,8 +612,9 @@
        ============================================================ */
     muteBtn.addEventListener('click', () => {
       bgm.muted = !bgm.muted;
-      if (!bgm.muted && bgm.paused) bgm.play().catch(() => {});
       muteBtn.textContent = bgm.muted ? '🔇' : '🔊';
+      if (bgm.muted) musicBtn.classList.remove('visible');
+      else tryPlayMusic();
     });
 
     /* ============================================================
@@ -703,9 +773,7 @@
        12) ถ้าผู้ใช้สลับแอปแล้วกลับมา → เล่นเพลงต่อ
        ============================================================ */
     document.addEventListener('visibilitychange', () => {
-      if (!document.hidden && started && !bgm.muted && bgm.paused) {
-        bgm.play().catch(() => {});
-      }
+      if (!document.hidden && started && bgm.paused) tryPlayMusic();
     });
   </script>
 </body>
